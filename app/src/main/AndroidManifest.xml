@@ -52,12 +52,19 @@
         <activity
             android:name=".app.TermuxActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|smallestScreenSize|density|screenLayout|keyboard|keyboardHidden|navigation"
+            android:configChanges="orientation|screenSize|smallestScreenSize|density|screenLayout|uiMode|keyboard|keyboardHidden|navigation"
             android:label="@string/application_name"
             android:launchMode="singleTask"
             android:resizeableActivity="true"
+            android:windowSoftInputMode="stateAlwaysHidden|adjustResize"
             android:theme="@style/Theme.TermuxActivity.DayNight.NoActionBar"
             tools:targetApi="n">
+            <layout
+                android:defaultWidth="960dp"
+                android:defaultHeight="640dp"
+                android:gravity="center"
+                android:minWidth="420dp"
+                android:minHeight="300dp" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
@@ -224,6 +231,11 @@
         <!-- Version >= 3.0. DeX Dual Mode support -->
         <meta-data
             android:name="com.samsung.android.multidisplay.keep_process_alive"
+            android:value="true" />
+
+        <!-- Samsung DeX & Multi-Window Desktop Support -->
+        <meta-data
+            android:name="com.samsung.android.sdk.multiwindow.enable"
             android:value="true" />
 
         <meta-data
