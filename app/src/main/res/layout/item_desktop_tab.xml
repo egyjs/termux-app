@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/desktop_tab_item_root"
+    android:layout_width="wrap_content"
+    android:layout_height="match_parent"
+    android:minWidth="120dp"
+    android:maxWidth="220dp"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:paddingStart="10dp"
+    android:paddingEnd="6dp"
+    android:layout_marginEnd="2dp"
+    android:background="#1A2639">
+
+    <View
+        android:id="@+id/desktop_tab_active_indicator"
+        android:layout_width="4dp"
+        android:layout_height="16dp"
+        android:layout_marginEnd="8dp"
+        android:background="#E6C786"
+        android:visibility="invisible" />
+
+    <TextView
+        android:id="@+id/desktop_tab_title"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:singleLine="true"
+        android:ellipsize="end"
+        android:textColor="#FFFFFF"
+        android:textSize="12sp"
+        android:fontFamily="monospace" />
+
+    <TextView
+        android:id="@+id/desktop_tab_close"
+        android:layout_width="22dp"
+        android:layout_height="22dp"
+        android:layout_marginStart="6dp"
+        android:gravity="center"
+        android:text="×"
+        android:textColor="#B0BEC5"
+        android:textSize="14sp"
+        android:background="?android:attr/selectableItemBackgroundBorderless"
+        android:contentDescription="Close session" />
+
+</LinearLayout>
