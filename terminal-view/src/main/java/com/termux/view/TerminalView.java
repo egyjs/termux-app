@@ -21,6 +21,7 @@ import android.view.HapticFeedbackConstants;
 import android.view.InputDevice;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
+import android.view.PointerIcon;
 import android.view.Menu;
 import android.view.MotionEvent;
 import android.view.View;
@@ -593,8 +594,13 @@ public final class TerminalView extends View {
     @Override
     public boolean onGenericMotionEvent(MotionEvent event) {
         if (mEmulator != null && event.isFromSource(InputDevice.SOURCE_MOUSE) && event.getAction() == MotionEvent.ACTION_SCROLL) {
-            // Handle mouse wheel scrolling.
             boolean up = event.getAxisValue(MotionEvent.AXIS_VSCROLL) > 0.0f;
+            if ((event.getMetaState() & KeyEvent.META_CTRL_ON) != 0) {
+                // Desktop Ctrl + Scroll Wheel zooms terminal font size
+                mScaleFactor = mClient.onScale(up ? 1.2f : 0.8f);
+                return true;
+            }
+            // Handle mouse wheel scrolling.
             doScroll(event, up ? -3 : 3);
             return true;
         }
@@ -606,41 +612,93 @@ public final class TerminalView extends View {
     @TargetApi(23)
     public boolean onTouchEvent(MotionEvent event) {
         if (mEmulator == null) return true;
-        final int action = event.getAction();
+        final int action = event.getActionMasked();
+
+        if (event.isFromSource(InputDevice.SOURCE_MOUSE)) {
+            requestFocus();
+
+            if (event.isButtonPressed(MotionEvent.BUTTON_SECONDARY)) {
+                if (action == MotionEvent.ACTION_DOWN) {
+                    if (mTextSelectionCursorController != null && isSelectingText()) {
+                        mTextSelectionCursorController.cacheSelectedTextForContextMenu();
+                    }
+                    showContextMenu();
+                }
+                return true;
+            } else if (event.isButtonPressed(MotionEvent.BUTTON_TERTIARY)) {
+                if (action == MotionEvent.ACTION_DOWN) {
+                    ClipboardManager clipboardManager = (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
+                    ClipData clipData = clipboardManager != null ? clipboardManager.getPrimaryClip() : null;
+                    if (clipData != null && clipData.getItemCount() > 0) {
+                        CharSequence text = clipData.getItemAt(0).coerceToText(getContext());
+                        if (!TextUtils.isEmpty(text)) mEmulator.paste(text.toString());
+                    }
+                }
+                return true;
+            }
+
+            boolean shiftOverride = (event.getMetaState() & KeyEvent.META_SHIFT_ON) != 0;
+            if (mEmulator.isMouseTrackingActive() && !shiftOverride) {
+                switch (action) {
+                    case MotionEvent.ACTION_DOWN:
+                    case MotionEvent.ACTION_UP:
+                        sendMouseEventCode(event, TerminalEmulator.MOUSE_LEFT_BUTTON, action == MotionEvent.ACTION_DOWN);
+                        break;
+                    case MotionEvent.ACTION_MOVE:
+                        if ((event.getButtonState() & MotionEvent.BUTTON_PRIMARY) != 0) {
+                            sendMouseEventCode(event, TerminalEmulator.MOUSE_LEFT_BUTTON_MOVED, true);
+                        }
+                        break;
+                }
+                return true;
+            } else {
+                // Desktop LMB click & drag text selection
+                switch (action) {
+                    case MotionEvent.ACTION_DOWN:
+                        if ((event.getButtonState() & MotionEvent.BUTTON_PRIMARY) != 0) {
+                            if ((event.getMetaState() & KeyEvent.META_CTRL_ON) != 0) {
+                                mClient.onSingleTapUp(event);
+                                return true;
+                            }
+                            getTextSelectionCursorController().startMouseSelection(event);
+                            mClient.copyModeChanged(isSelectingText());
+                            return true;
+                        }
+                        break;
+                    case MotionEvent.ACTION_MOVE:
+                        if ((event.getButtonState() & MotionEvent.BUTTON_PRIMARY) != 0) {
+                            getTextSelectionCursorController().updateMouseSelection(event);
+                            mClient.copyModeChanged(isSelectingText());
+                            return true;
+                        }
+                        break;
+                    case MotionEvent.ACTION_UP:
+                        mClient.copyModeChanged(isSelectingText());
+                        return true;
+                }
+            }
+        }
 
         if (isSelectingText()) {
             updateFloatingToolbarVisibility(event);
             mGestureRecognizer.onTouchEvent(event);
             return true;
-        } else if (event.isFromSource(InputDevice.SOURCE_MOUSE)) {
-            if (event.isButtonPressed(MotionEvent.BUTTON_SECONDARY)) {
-                if (action == MotionEvent.ACTION_DOWN) showContextMenu();
-                return true;
-            } else if (event.isButtonPressed(MotionEvent.BUTTON_TERTIARY)) {
-                ClipboardManager clipboardManager = (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
-                ClipData clipData = clipboardManager.getPrimaryClip();
-                if (clipData != null) {
-                    ClipData.Item clipItem = clipData.getItemAt(0);
-                    if (clipItem != null) {
-                        CharSequence text = clipItem.coerceToText(getContext());
-                        if (!TextUtils.isEmpty(text)) mEmulator.paste(text.toString());
-                    }
-                }
-            } else if (mEmulator.isMouseTrackingActive()) { // BUTTON_PRIMARY.
-                switch (event.getAction()) {
-                    case MotionEvent.ACTION_DOWN:
-                    case MotionEvent.ACTION_UP:
-                        sendMouseEventCode(event, TerminalEmulator.MOUSE_LEFT_BUTTON, event.getAction() == MotionEvent.ACTION_DOWN);
-                        break;
-                    case MotionEvent.ACTION_MOVE:
-                        sendMouseEventCode(event, TerminalEmulator.MOUSE_LEFT_BUTTON_MOVED, true);
-                        break;
-                }
-            }
         }
 
         mGestureRecognizer.onTouchEvent(event);
         return true;
+    }
+
+    @Override
+    @TargetApi(24)
+    public PointerIcon onResolvePointerIcon(MotionEvent event, int pointerIndex) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && mEmulator != null) {
+            if ((event.getMetaState() & KeyEvent.META_CTRL_ON) != 0) {
+                return PointerIcon.getSystemIcon(getContext(), PointerIcon.TYPE_HAND);
+            }
+            return PointerIcon.getSystemIcon(getContext(), PointerIcon.TYPE_TEXT);
+        }
+        return super.onResolvePointerIcon(event, pointerIndex);
     }
 
     @Override
