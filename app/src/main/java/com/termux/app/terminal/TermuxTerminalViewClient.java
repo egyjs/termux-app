@@ -186,7 +186,8 @@ public class TermuxTerminalViewClient extends TermuxTerminalViewClientBase {
     public void onSingleTapUp(MotionEvent e) {
         TerminalEmulator term = mActivity.getCurrentSession().getEmulator();
 
-        if (mActivity.getProperties().shouldOpenTerminalTranscriptURLOnClick()) {
+        boolean isCtrlMouseClick = e.isFromSource(InputDevice.SOURCE_MOUSE) && (e.getMetaState() & KeyEvent.META_CTRL_ON) != 0;
+        if (isCtrlMouseClick || mActivity.getProperties().shouldOpenTerminalTranscriptURLOnClick()) {
             int[] columnAndRow = mActivity.getTerminalView().getColumnAndRow(e, true);
             String wordAtTap = term.getScreen().getWordAtLocation(columnAndRow[0], columnAndRow[1]);
             LinkedHashSet<CharSequence> urlSet = TermuxUrlUtils.extractUrls(wordAtTap);
@@ -244,6 +245,53 @@ public class TermuxTerminalViewClient extends TermuxTerminalViewClientBase {
         if (keyCode == KeyEvent.KEYCODE_ENTER && !currentSession.isRunning()) {
             mTermuxTerminalSessionActivityClient.removeFinishedSession(currentSession);
             return true;
+        } else if (!mActivity.getProperties().areHardwareKeyboardShortcutsDisabled() &&
+            e.isCtrlPressed() && keyCode == KeyEvent.KEYCODE_TAB) {
+            // Desktop Ctrl+Tab / Ctrl+Shift+Tab switches tabs
+            mTermuxTerminalSessionActivityClient.switchToSession(!e.isShiftPressed());
+            return true;
+        } else if (!mActivity.getProperties().areHardwareKeyboardShortcutsDisabled() &&
+            e.isCtrlPressed() && e.isShiftPressed()) {
+            switch (keyCode) {
+                case KeyEvent.KEYCODE_C: {
+                    String selectedText = mActivity.getTerminalView().getSelectedText();
+                    if (! DataUtils.isNullOrEmpty(selectedText)) {
+                        currentSession.onCopyTextToClipboard(selectedText);
+                        mActivity.getTerminalView().stopTextSelectionMode();
+                    }
+                    return true;
+                }
+                case KeyEvent.KEYCODE_V:
+                    doPaste();
+                    return true;
+                case KeyEvent.KEYCODE_T:
+                    mTermuxTerminalSessionActivityClient.addNewSession(false, null);
+                    return true;
+                case KeyEvent.KEYCODE_W:
+                    if (currentSession != null) {
+                        if (currentSession.isRunning()) {
+                            currentSession.finishIfRunning();
+                        }
+                        mTermuxTerminalSessionActivityClient.removeFinishedSession(currentSession);
+                    }
+                    return true;
+                case KeyEvent.KEYCODE_R:
+                    mTermuxTerminalSessionActivityClient.renameSession(currentSession);
+                    return true;
+                case KeyEvent.KEYCODE_D:
+                    mActivity.toggleDesktopSplitPane(false); // Horizontal split (side-by-side)
+                    return true;
+                case KeyEvent.KEYCODE_E:
+                    mActivity.toggleDesktopSplitPane(true);  // Vertical split (top/bottom)
+                    return true;
+                case KeyEvent.KEYCODE_PLUS:
+                case KeyEvent.KEYCODE_EQUALS:
+                    changeFontSize(true);
+                    return true;
+                case KeyEvent.KEYCODE_MINUS:
+                    changeFontSize(false);
+                    return true;
+            }
         } else if (!mActivity.getProperties().areHardwareKeyboardShortcutsDisabled() &&
             e.isCtrlPressed() && e.isAltPressed()) {
             // Get the unmodified code point:
