@@ -29,7 +29,9 @@ public class TextSelectionCursorController implements CursorController {
 
     private final int mHandleHeight;
     private int mSelX1 = -1, mSelX2 = -1, mSelY1 = -1, mSelY2 = -1;
-    private int mAnchorX = -1, mAnchorY = -1;
+    // Mouse drag anchor. Any int is a valid transcript row, so validity is tracked separately.
+    private int mAnchorX, mAnchorY;
+    private boolean mHasMouseAnchor = false;
     private long mLastMouseDownTime = 0;
     private int mMouseClickCount = 0;
     private int mLastClickX = -1, mLastClickY = -1;
@@ -55,6 +57,9 @@ public class TextSelectionCursorController implements CursorController {
 
         setActionModeCallBacks();
         mShowStartTime = System.currentTimeMillis();
+        // Touch selection: drop any state left over from a mouse click that never selected.
+        mIsMouseSelection = false;
+        mHasMouseAnchor = false;
         mIsSelectingText = true;
     }
 
@@ -78,7 +83,7 @@ public class TextSelectionCursorController implements CursorController {
         }
 
         mSelX1 = mSelY1 = mSelX2 = mSelY2 = -1;
-        mAnchorX = mAnchorY = -1;
+        mHasMouseAnchor = false;
         mIsSelectingText = false;
         mIsMouseSelection = false;
 
@@ -347,6 +352,9 @@ public class TextSelectionCursorController implements CursorController {
     public void decrementYTextSelectionCursors(int decrement) {
         mSelY1 -= decrement;
         mSelY2 -= decrement;
+        // Keep the mouse drag anchor on the same text when output scrolls.
+        mAnchorY -= decrement;
+        mLastClickY -= decrement;
     }
 
     public boolean onTouchEvent(MotionEvent event) {
@@ -442,6 +450,7 @@ public class TextSelectionCursorController implements CursorController {
 
         mAnchorX = col;
         mAnchorY = row;
+        mHasMouseAnchor = true;
         mIsMouseSelection = true;
 
         if (mMouseClickCount == 1) {
@@ -466,7 +475,7 @@ public class TextSelectionCursorController implements CursorController {
      * Update selection range as the mouse drags with primary button held.
      */
     public void updateMouseSelection(MotionEvent event) {
-        if (terminalView.mEmulator == null || mAnchorY == -1) return;
+        if (terminalView.mEmulator == null || !mHasMouseAnchor) return;
 
         TerminalBuffer screen = terminalView.mEmulator.getScreen();
         final int scrollRows = screen.getActiveRows() - terminalView.mEmulator.mRows;

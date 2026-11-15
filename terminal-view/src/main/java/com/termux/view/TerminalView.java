@@ -616,6 +616,10 @@ public final class TerminalView extends View {
 
         if (event.isFromSource(InputDevice.SOURCE_MOUSE)) {
             requestFocus();
+            // A mouse drag is a selection, not a gesture: keep parents like the session
+            // DrawerLayout from turning a drag that starts at the left edge into a drawer swipe.
+            if (action == MotionEvent.ACTION_DOWN && getParent() != null)
+                getParent().requestDisallowInterceptTouchEvent(true);
 
             if (event.isButtonPressed(MotionEvent.BUTTON_SECONDARY)) {
                 if (action == MotionEvent.ACTION_DOWN) {
@@ -829,7 +833,10 @@ public final class TerminalView extends View {
         if (TERMINAL_VIEW_KEY_LOGGING_ENABLED)
             mClient.logInfo(LOG_TAG, "onKeyDown(keyCode=" + keyCode + ", isSystem()=" + event.isSystem() + ", event=" + event + ")");
         if (mEmulator == null) return true;
-        if (isSelectingText()) {
+        // Keep the selection while modifiers go down and for the Ctrl+Shift+C copy shortcut,
+        // which the client handles and which ends the selection itself.
+        boolean isCopyShortcut = keyCode == KeyEvent.KEYCODE_C && event.isCtrlPressed() && event.isShiftPressed();
+        if (isSelectingText() && !KeyEvent.isModifierKey(keyCode) && !isCopyShortcut) {
             stopTextSelectionMode();
         }
 
