@@ -10,6 +10,8 @@ import android.view.View;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import androidx.drawerlayout.widget.DrawerLayout;
+
 import com.termux.R;
 import com.termux.app.TermuxActivity;
 import com.termux.app.TermuxService;
@@ -18,6 +20,7 @@ import com.termux.shared.activity.ActivityUtils;
 import com.termux.shared.termux.shell.command.runner.terminal.TermuxSession;
 import com.termux.terminal.TerminalSession;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -39,6 +42,31 @@ public class DesktopTabController {
                     mActivity.getTermuxTerminalSessionClient().addNewSession(false, null);
                 }
             });
+            // Long press: named or failsafe session (was long press on the drawer's New session).
+            newTabButton.setOnLongClickListener(v -> {
+                mActivity.showNewNamedSessionDialog();
+                return true;
+            });
+        }
+
+        View keyboardBtn = activity.findViewById(R.id.desktop_keyboard_button);
+        if (keyboardBtn != null) {
+            keyboardBtn.setOnClickListener(v -> {
+                if (mActivity.getTermuxTerminalViewClient() != null)
+                    mActivity.getTermuxTerminalViewClient().onToggleSoftKeyboardRequest();
+            });
+            keyboardBtn.setOnLongClickListener(v -> {
+                mActivity.toggleTerminalToolbar();
+                return true;
+            });
+        }
+
+        // The tab bar replaces the session drawer: no edge swipe (it also stole mouse drags that
+        // start at column 0). The drawer can still be opened from code (extra-keys DRAWER key,
+        // Ctrl+Alt+Right).
+        View topBar = activity.findViewById(R.id.desktop_top_bar);
+        if (topBar != null && topBar.getVisibility() == View.VISIBLE) {
+            mActivity.getDrawer().setDrawerLockMode(DrawerLayout.LOCK_MODE_LOCKED_CLOSED);
         }
 
         View splitHorizontalBtn = activity.findViewById(R.id.desktop_split_horizontal_button);
@@ -66,13 +94,21 @@ public class DesktopTabController {
         TermuxService service = mActivity.getTermuxService();
         if (service == null) return;
 
-        List<TermuxSession> sessions = service.getTermuxSessions();
+        // One tab per tab session; a split partner is shown inside its tab, not as a tab.
+        DesktopSplitPaneManager splitPaneManager = mActivity.getDesktopSplitPaneManager();
+        List<TerminalSession> tabs = new ArrayList<>();
+        if (splitPaneManager != null) {
+            tabs = splitPaneManager.getTabs();
+        } else {
+            for (TermuxSession ts : service.getTermuxSessions()) tabs.add(ts.getTerminalSession());
+        }
         TerminalSession currentSession = mActivity.getCurrentSession();
+        TerminalSession currentTab = (splitPaneManager != null && currentSession != null)
+            ? splitPaneManager.tabOf(currentSession) : currentSession;
         LayoutInflater inflater = mActivity.getLayoutInflater();
 
-        for (int i = 0; i < sessions.size(); i++) {
-            final TermuxSession termuxSession = sessions.get(i);
-            final TerminalSession session = termuxSession.getTerminalSession();
+        for (int i = 0; i < tabs.size(); i++) {
+            final TerminalSession session = tabs.get(i);
             if (session == null) continue;
 
             View tabView = inflater.inflate(R.layout.item_desktop_tab, mTabStrip, false);
@@ -80,24 +116,19 @@ public class DesktopTabController {
             TextView titleView = tabView.findViewById(R.id.desktop_tab_title);
             TextView closeBtn = tabView.findViewById(R.id.desktop_tab_close);
 
-            boolean isSelected = (session == currentSession);
+            boolean isSelected = (session == currentTab);
             indicator.setVisibility(isSelected ? View.VISIBLE : View.INVISIBLE);
             tabView.setBackgroundColor(Color.parseColor(isSelected ? "#1E3A6D" : "#0F1E3A"));
 
-            String label = "[" + (i + 1) + "] ";
-            if (!TextUtils.isEmpty(session.mSessionName)) {
-                label += session.mSessionName;
-            } else if (!TextUtils.isEmpty(session.getTitle())) {
-                label += session.getTitle();
-            } else {
-                label += "bash";
-            }
+            String label = "[" + (i + 1) + "] " + sessionLabel(session);
+            TerminalSession partner = splitPaneManager != null ? splitPaneManager.partnerOf(session) : null;
+            if (partner != null) label += " | " + sessionLabel(partner);
             titleView.setText(label);
 
             tabView.setOnClickListener(v -> {
                 if (mActivity.getTermuxTerminalSessionClient() != null) {
+                    // setCurrentSession() refreshes the tabs itself.
                     mActivity.getTermuxTerminalSessionClient().setCurrentSession(session);
-                    refreshTabs();
                 }
             });
 
@@ -125,12 +156,15 @@ public class DesktopTabController {
         }
     }
 
-    private void closeSession(TerminalSession session) {
-        if (session == null || mActivity.getTermuxTerminalSessionClient() == null) return;
-        if (session.isRunning()) {
-            session.finishIfRunning();
-        }
-        mActivity.getTermuxTerminalSessionClient().removeFinishedSession(session);
-        refreshTabs();
+    /** Close the whole tab (both panes); confirms before killing a running process. */
+    private void closeSession(TerminalSession tab) {
+        if (mActivity.getTermuxTerminalSessionClient() == null) return;
+        mActivity.getTermuxTerminalSessionClient().closeTab(tab);
+    }
+
+    private static String sessionLabel(TerminalSession session) {
+        if (!TextUtils.isEmpty(session.mSessionName)) return session.mSessionName;
+        if (!TextUtils.isEmpty(session.getTitle())) return session.getTitle();
+        return "bash";
     }
 }

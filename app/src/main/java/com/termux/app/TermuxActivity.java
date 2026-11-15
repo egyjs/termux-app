@@ -254,6 +254,8 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         setTermuxTerminalViewAndClients();
 
         setTerminalToolbarView(savedInstanceState);
+        // After setTerminalToolbarView(), which shows the toolbar from the preference.
+        updateDesktopToolbarVisibilityForHardwareKeyboard();
 
         setSettingsButtonView();
 
@@ -508,7 +510,6 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
         mDesktopTabController = new DesktopTabController(this);
         mDesktopSplitPaneManager = new DesktopSplitPaneManager(this);
-        updateDesktopToolbarVisibilityForHardwareKeyboard();
     }
 
     private void setTermuxSessionsListView() {
@@ -559,7 +560,10 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         final ViewPager terminalToolbarViewPager = getTerminalToolbarViewPager();
         if (terminalToolbarViewPager == null) return;
 
-        final boolean showNow = mPreferences.toogleShowTerminalToolbar();
+        // Toggle what is on screen, not the stored preference: the toolbar may be hidden for a
+        // hardware keyboard while the preference still says shown.
+        final boolean showNow = terminalToolbarViewPager.getVisibility() != View.VISIBLE;
+        mPreferences.setShowTerminalToolbar(showNow);
         Logger.showToast(this, (showNow ? getString(R.string.msg_enabling_terminal_toolbar) : getString(R.string.msg_disabling_terminal_toolbar)), true);
         terminalToolbarViewPager.setVisibility(showNow ? View.VISIBLE : View.GONE);
         if (showNow && isTerminalToolbarTextInputViewSelected()) {
@@ -591,12 +595,17 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         View newSessionButton = findViewById(R.id.new_session_button);
         newSessionButton.setOnClickListener(v -> mTermuxTerminalSessionActivityClient.addNewSession(false, null));
         newSessionButton.setOnLongClickListener(v -> {
-            TextInputDialogUtils.textInput(TermuxActivity.this, R.string.title_create_named_session, null,
-                R.string.action_create_named_session_confirm, text -> mTermuxTerminalSessionActivityClient.addNewSession(false, text),
-                R.string.action_new_session_failsafe, text -> mTermuxTerminalSessionActivityClient.addNewSession(true, text),
-                -1, null, null);
+            showNewNamedSessionDialog();
             return true;
         });
+    }
+
+    /** Dialog to create a named session, or a failsafe one. */
+    public void showNewNamedSessionDialog() {
+        TextInputDialogUtils.textInput(TermuxActivity.this, R.string.title_create_named_session, null,
+            R.string.action_create_named_session_confirm, text -> mTermuxTerminalSessionActivityClient.addNewSession(false, text),
+            R.string.action_new_session_failsafe, text -> mTermuxTerminalSessionActivityClient.addNewSession(true, text),
+            -1, null, null);
     }
 
     private void setToggleKeyboardView() {
@@ -637,9 +646,10 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
             config.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO);
         boolean isDeskMode = (config.uiMode & Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_DESK;
         ViewPager pager = getTerminalToolbarViewPager();
-        if (pager != null && (hasHardwareKeyboard || isDeskMode)) {
-            pager.setVisibility(View.GONE);
-        }
+        if (pager == null) return;
+        // Hide extra keys while a hardware keyboard / desk mode is present, otherwise follow the preference.
+        boolean show = !hasHardwareKeyboard && !isDeskMode && mPreferences.shouldShowTerminalToolbar();
+        pager.setVisibility(show ? View.VISIBLE : View.GONE);
     }
 
     @Override
@@ -647,7 +657,8 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         super.onConfigurationChanged(newConfig);
         updateDesktopToolbarVisibilityForHardwareKeyboard();
         if (mTerminalView != null) mTerminalView.updateSize();
-        if (mDesktopSplitPaneManager != null && mDesktopSplitPaneManager.getSecondaryView() != null) {
+        // A hidden secondary pane keeps stale bounds and may share a session with the primary pane.
+        if (mDesktopSplitPaneManager != null && mDesktopSplitPaneManager.isSplitActive()) {
             mDesktopSplitPaneManager.getSecondaryView().updateSize();
         }
     }
@@ -675,10 +686,11 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         TerminalSession currentSession = getCurrentSession();
         if (currentSession == null) return;
 
-        boolean autoFillEnabled = mTerminalView.isAutoFillEnabled();
-        String selectedText = mTerminalView.getSelectedText();
+        TerminalView terminalView = getTerminalView();
+        boolean autoFillEnabled = terminalView.isAutoFillEnabled();
+        String selectedText = terminalView.getSelectedText();
         if (DataUtils.isNullOrEmpty(selectedText)) {
-            selectedText = mTerminalView.getStoredSelectedText();
+            selectedText = terminalView.getStoredSelectedText();
         }
 
         if (!DataUtils.isNullOrEmpty(selectedText)) {
@@ -690,7 +702,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
         menu.add(Menu.NONE, CONTEXT_MENU_SELECT_URL_ID, Menu.NONE, R.string.action_select_url);
         menu.add(Menu.NONE, CONTEXT_MENU_SHARE_TRANSCRIPT_ID, Menu.NONE, R.string.action_share_transcript);
-        if (!DataUtils.isNullOrEmpty(mTerminalView.getStoredSelectedText()))
+        if (!DataUtils.isNullOrEmpty(terminalView.getStoredSelectedText()))
             menu.add(Menu.NONE, CONTEXT_MENU_SHARE_SELECTED_TEXT, Menu.NONE, R.string.action_share_selected_text);
         if (autoFillEnabled)
             menu.add(Menu.NONE, CONTEXT_MENU_AUTOFILL_USERNAME, Menu.NONE, R.string.action_autofill_username);
@@ -708,7 +720,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
     /** Hook system menu to show context menu instead. */
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
-        mTerminalView.showContextMenu();
+        getTerminalView().showContextMenu();
         return false;
     }
 
@@ -718,11 +730,12 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
         switch (item.getItemId()) {
             case CONTEXT_MENU_COPY_ID: {
-                String sel = mTerminalView.getSelectedText();
-                if (DataUtils.isNullOrEmpty(sel)) sel = mTerminalView.getStoredSelectedText();
+                TerminalView terminalView = getTerminalView();
+                String sel = terminalView.getSelectedText();
+                if (DataUtils.isNullOrEmpty(sel)) sel = terminalView.getStoredSelectedText();
                 if (!DataUtils.isNullOrEmpty(sel) && session != null) {
                     session.onCopyTextToClipboard(sel);
-                    mTerminalView.stopTextSelectionMode();
+                    terminalView.stopTextSelectionMode();
                 }
                 return true;
             }
@@ -745,10 +758,10 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
                 mTermuxTerminalViewClient.shareSelectedText();
                 return true;
             case CONTEXT_MENU_AUTOFILL_USERNAME:
-                mTerminalView.requestAutoFillUsername();
+                getTerminalView().requestAutoFillUsername();
                 return true;
             case CONTEXT_MENU_AUTOFILL_PASSWORD:
-                mTerminalView.requestAutoFillPassword();
+                getTerminalView().requestAutoFillPassword();
                 return true;
             case CONTEXT_MENU_RESET_TERMINAL_ID:
                 onResetTerminalSession(session);
@@ -780,7 +793,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
     public void onContextMenuClosed(Menu menu) {
         super.onContextMenuClosed(menu);
         // onContextMenuClosed() is triggered twice if back button is pressed to dismiss instead of tap for some reason
-        mTerminalView.onContextMenuClosed(menu);
+        getTerminalView().onContextMenuClosed(menu);
     }
 
     private void showKillSessionDialog(TerminalSession session) {
@@ -953,8 +966,15 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         return mTermuxService;
     }
 
+    /** The terminal pane the user is working in: the focused split pane, else the main view. */
     public TerminalView getTerminalView() {
+        if (mDesktopSplitPaneManager != null) return mDesktopSplitPaneManager.getActiveView();
         return mTerminalView;
+    }
+
+    @Nullable
+    public DesktopSplitPaneManager getDesktopSplitPaneManager() {
+        return mDesktopSplitPaneManager;
     }
 
     public TermuxTerminalViewClient getTermuxTerminalViewClient() {
@@ -967,8 +987,9 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
     @Nullable
     public TerminalSession getCurrentSession() {
-        if (mTerminalView != null)
-            return mTerminalView.getCurrentSession();
+        TerminalView terminalView = getTerminalView();
+        if (terminalView != null)
+            return terminalView.getCurrentSession();
         else
             return null;
     }

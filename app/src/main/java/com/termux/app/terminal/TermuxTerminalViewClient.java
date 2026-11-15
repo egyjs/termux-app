@@ -6,6 +6,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.media.AudioManager;
+import android.os.Build;
 import android.os.Environment;
 import android.text.TextUtils;
 import android.view.Gravity;
@@ -13,6 +14,7 @@ import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.WindowInsets;
 import android.widget.EditText;
 import android.widget.ListView;
 import android.widget.Toast;
@@ -66,6 +68,9 @@ public class TermuxTerminalViewClient extends TermuxTerminalViewClientBase {
 
     private boolean mShowSoftKeyboardIgnoreOnce;
     private boolean mShowSoftKeyboardWithDelayOnce;
+
+    /** Last show/hide decision of {@link #onToggleSoftKeyboardRequest()} in show/hide mode. */
+    private boolean mSoftKeyboardShownByToggle;
 
     private boolean mTerminalCursorBlinkerStateAlreadySet;
 
@@ -248,10 +253,11 @@ public class TermuxTerminalViewClient extends TermuxTerminalViewClientBase {
         } else if (!mActivity.getProperties().areHardwareKeyboardShortcutsDisabled() &&
             e.isCtrlPressed() && keyCode == KeyEvent.KEYCODE_TAB) {
             // Desktop Ctrl+Tab / Ctrl+Shift+Tab switches tabs
-            mTermuxTerminalSessionActivityClient.switchToSession(!e.isShiftPressed());
+            mTermuxTerminalSessionActivityClient.switchToTab(!e.isShiftPressed());
             return true;
         } else if (!mActivity.getProperties().areHardwareKeyboardShortcutsDisabled() &&
-            e.isCtrlPressed() && e.isShiftPressed()) {
+            e.isCtrlPressed() && e.isShiftPressed() && !e.isAltPressed()) {
+            // Ctrl+Alt(+Shift) shortcuts are handled by the next branch.
             switch (keyCode) {
                 case KeyEvent.KEYCODE_C: {
                     String selectedText = mActivity.getTerminalView().getSelectedText();
@@ -268,12 +274,7 @@ public class TermuxTerminalViewClient extends TermuxTerminalViewClientBase {
                     mTermuxTerminalSessionActivityClient.addNewSession(false, null);
                     return true;
                 case KeyEvent.KEYCODE_W:
-                    if (currentSession != null) {
-                        if (currentSession.isRunning()) {
-                            currentSession.finishIfRunning();
-                        }
-                        mTermuxTerminalSessionActivityClient.removeFinishedSession(currentSession);
-                    }
+                    mTermuxTerminalSessionActivityClient.closeSession(currentSession);
                     return true;
                 case KeyEvent.KEYCODE_R:
                     mTermuxTerminalSessionActivityClient.renameSession(currentSession);
@@ -566,7 +567,10 @@ public class TermuxTerminalViewClient extends TermuxTerminalViewClientBase {
 
     public void changeFontSize(boolean increase) {
         mActivity.getPreferences().changeFontSize(increase);
-        mActivity.getTerminalView().setTextSize(mActivity.getPreferences().getFontSize());
+        int fontSize = mActivity.getPreferences().getFontSize();
+        DesktopSplitPaneManager splitPaneManager = mActivity.getDesktopSplitPaneManager();
+        if (splitPaneManager != null) splitPaneManager.setTextSize(fontSize);
+        else mActivity.getTerminalView().setTextSize(fontSize);
     }
 
 
@@ -606,9 +610,22 @@ public class TermuxTerminalViewClient extends TermuxTerminalViewClientBase {
                 Logger.logVerbose(LOG_TAG, "Maintaining disabled soft keyboard on toggle");
                 KeyboardUtils.disableSoftKeyboard(mActivity, mActivity.getTerminalView());
             } else {
-                Logger.logVerbose(LOG_TAG, "Showing/Hiding soft keyboard on toggle");
                 KeyboardUtils.clearDisableSoftKeyboardFlags(mActivity);
-                KeyboardUtils.toggleSoftKeyboard(mActivity);
+                // InputMethodManager.toggleSoftInput() only ever shows on Android 12+ (deprecated),
+                // so decide here. The IME may sit on another display (phone while Termux is on a
+                // TV), where this window gets no IME insets, hence the own flag as well.
+                View terminalView = mActivity.getTerminalView();
+                boolean imeVisible = mSoftKeyboardShownByToggle;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && terminalView.getRootWindowInsets() != null)
+                    imeVisible |= terminalView.getRootWindowInsets().isVisible(WindowInsets.Type.ime());
+                Logger.logVerbose(LOG_TAG, (imeVisible ? "Hiding" : "Showing") + " soft keyboard on toggle");
+                if (imeVisible) {
+                    KeyboardUtils.hideSoftKeyboard(mActivity, terminalView);
+                } else {
+                    terminalView.requestFocus();
+                    KeyboardUtils.showSoftKeyboard(mActivity, terminalView);
+                }
+                mSoftKeyboardShownByToggle = !imeVisible;
             }
         }
     }
