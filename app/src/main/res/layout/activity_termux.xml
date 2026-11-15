@@ -7,6 +7,88 @@
     android:orientation="vertical"
     android:fitsSystemWindows="true">
 
+    <!-- Desktop Top Tab Bar (Always visible for mouse/DeX workflow) -->
+    <LinearLayout
+        android:id="@+id/desktop_top_bar"
+        android:layout_width="match_parent"
+        android:layout_height="36dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#12264A"
+        android:paddingStart="4dp"
+        android:paddingEnd="4dp">
+
+        <HorizontalScrollView
+            android:id="@+id/desktop_tab_scroll"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:scrollbars="none"
+            android:fillViewport="false">
+
+            <LinearLayout
+                android:id="@+id/desktop_tab_strip"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:orientation="horizontal"
+                android:gravity="center_vertical" />
+        </HorizontalScrollView>
+
+        <TextView
+            android:id="@+id/desktop_new_tab_button"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:gravity="center"
+            android:text="+"
+            android:textColor="#E6C786"
+            android:textSize="18sp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/action_new_session" />
+
+        <TextView
+            android:id="@+id/desktop_split_horizontal_button"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:gravity="center"
+            android:text="◫"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Split Horizontally (Ctrl+Shift+D)" />
+
+        <TextView
+            android:id="@+id/desktop_split_vertical_button"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:gravity="center"
+            android:text="⬒"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Split Vertically (Ctrl+Shift+E)" />
+
+        <!-- Soft keyboard toggle (was in the session drawer); long press toggles extra keys -->
+        <TextView
+            android:id="@+id/desktop_keyboard_button"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:gravity="center"
+            android:text="⌨"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/action_toggle_soft_keyboard" />
+
+        <ImageButton
+            android:id="@+id/desktop_settings_button"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:src="@drawable/ic_settings"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/action_open_settings"
+            app:tint="#FFFFFF" />
+    </LinearLayout>
+
     <RelativeLayout
         android:id="@+id/activity_termux_root_relative_layout"
         android:layout_width="match_parent"
@@ -23,15 +105,44 @@
             android:layout_above="@+id/terminal_toolbar_view_pager"
             android:layout_height="match_parent">
 
-            <com.termux.view.TerminalView
-                android:id="@+id/terminal_view"
+            <LinearLayout
+                android:id="@+id/desktop_split_container"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:defaultFocusHighlightEnabled="false"
-                android:focusableInTouchMode="true"
-                android:scrollbarThumbVertical="@drawable/terminal_scroll_shape"
-                android:scrollbars="vertical"
-                tools:ignore="UnusedAttribute" />
+                android:orientation="horizontal"
+                android:baselineAligned="false">
+
+                <com.termux.view.TerminalView
+                    android:id="@+id/terminal_view"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:defaultFocusHighlightEnabled="false"
+                    android:focusableInTouchMode="true"
+                    android:scrollbarThumbVertical="@drawable/terminal_scroll_shape"
+                    android:scrollbars="vertical"
+                    tools:ignore="UnusedAttribute" />
+
+                <View
+                    android:id="@+id/desktop_split_divider"
+                    android:layout_width="2dp"
+                    android:layout_height="match_parent"
+                    android:background="#12264A"
+                    android:visibility="gone" />
+
+                <com.termux.view.TerminalView
+                    android:id="@+id/terminal_view_secondary"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:visibility="gone"
+                    android:defaultFocusHighlightEnabled="false"
+                    android:focusableInTouchMode="true"
+                    android:scrollbarThumbVertical="@drawable/terminal_scroll_shape"
+                    android:scrollbars="vertical"
+                    tools:ignore="UnusedAttribute" />
+
+            </LinearLayout>
 
             <LinearLayout
                 android:id="@+id/left_drawer"

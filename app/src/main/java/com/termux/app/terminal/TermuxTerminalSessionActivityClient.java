@@ -35,7 +35,12 @@ import com.termux.terminal.TextStyle;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Properties;
+import java.util.Set;
 
 /** The {@link TerminalSessionClient} implementation that may require an {@link Activity} for its interface methods. */
 public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionClientBase {
@@ -43,6 +48,9 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
     private final TermuxActivity mActivity;
 
     private static final int MAX_SESSIONS = 8;
+
+    /** Sessions killed by {@link #closeSession}; removed once their exit arrives in {@link #onSessionFinished}. */
+    private final Set<TerminalSession> mSessionsToRemoveOnExit = new HashSet<>();
 
     private SoundPool mBellSoundPool;
 
@@ -118,7 +126,9 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
     public void onTextChanged(@NonNull TerminalSession changedSession) {
         if (!mActivity.isVisible()) return;
 
-        if (mActivity.getCurrentSession() == changedSession) mActivity.getTerminalView().onScreenUpdated();
+        DesktopSplitPaneManager splitPaneManager = mActivity.getDesktopSplitPaneManager();
+        if (splitPaneManager != null) splitPaneManager.onTextChanged(changedSession);
+        else if (mActivity.getCurrentSession() == changedSession) mActivity.getTerminalView().onScreenUpdated();
     }
 
     @Override
@@ -142,6 +152,11 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
         if (service == null || service.wantsToStop()) {
             // The service wants to stop as soon as possible.
             mActivity.finishActivityIfNotFinishing();
+            return;
+        }
+
+        if (mSessionsToRemoveOnExit.remove(finishedSession)) {
+            removeFinishedSession(finishedSession);
             return;
         }
 
@@ -293,7 +308,14 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
     public void setCurrentSession(TerminalSession session) {
         if (session == null) return;
 
-        if (mActivity.getTerminalView().attachSession(session)) {
+        // Desktop tabs: show the session's tab (and its split) instead of attaching it to the
+        // focused pane, so a session never sits in two panes.
+        DesktopSplitPaneManager splitPaneManager = mActivity.getDesktopSplitPaneManager();
+        boolean changed = splitPaneManager != null
+            ? splitPaneManager.showSession(session)
+            : mActivity.getTerminalView().attachSession(session);
+
+        if (changed) {
             // notify about switched session if not already displaying the session
             notifyOfSessionChange();
         }
@@ -301,6 +323,7 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
         // We call the following even when the session is already being displayed since config may
         // be stale, like current session not selected or scrolled to.
         checkAndScrollToSession(session);
+        mActivity.termuxSessionListNotifyUpdated();
         updateBackgroundColor();
     }
 
@@ -329,6 +352,19 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
         TermuxSession termuxSession = service.getTermuxSession(index);
         if (termuxSession != null)
             setCurrentSession(termuxSession.getTerminalSession());
+    }
+
+    /** Ctrl+Tab: next/previous desktop tab (split partners are not tabs). */
+    public void switchToTab(boolean forward) {
+        DesktopSplitPaneManager splitPaneManager = mActivity.getDesktopSplitPaneManager();
+        if (splitPaneManager == null) {
+            switchToSession(forward);
+            return;
+        }
+        TerminalSession current = mActivity.getCurrentSession();
+        TerminalSession next = DesktopTabModel.neighbour(splitPaneManager.getTabs(),
+            current != null ? splitPaneManager.tabOf(current) : null, forward);
+        if (next != null) setCurrentSession(next);
     }
 
     public void switchToSession(int index) {
@@ -362,30 +398,89 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
     }
 
     public void addNewSession(boolean isFailSafe, String sessionName) {
+        TerminalSession newTerminalSession = createSession(isFailSafe, sessionName);
+        if (newTerminalSession == null) return;
+
+        setCurrentSession(newTerminalSession);
+
+        mActivity.getDrawer().closeDrawers();
+    }
+
+    /**
+     * Create a session in the current session's cwd without showing it, e.g. for a split pane.
+     * Shows the "max terminals" dialog and returns null if {@link #MAX_SESSIONS} is reached.
+     */
+    @Nullable
+    public TerminalSession createSession(boolean isFailSafe, String sessionName) {
         TermuxService service = mActivity.getTermuxService();
-        if (service == null) return;
+        if (service == null) return null;
 
         if (service.getTermuxSessionsSize() >= MAX_SESSIONS) {
             new AlertDialog.Builder(mActivity).setTitle(R.string.title_max_terminals_reached).setMessage(R.string.msg_max_terminals_reached)
                 .setPositiveButton(android.R.string.ok, null).show();
-        } else {
-            TerminalSession currentSession = mActivity.getCurrentSession();
-
-            String workingDirectory;
-            if (currentSession == null) {
-                workingDirectory = mActivity.getProperties().getDefaultWorkingDirectory();
-            } else {
-                workingDirectory = currentSession.getCwd();
-            }
-
-            TermuxSession newTermuxSession = service.createTermuxSession(null, null, null, workingDirectory, isFailSafe, sessionName);
-            if (newTermuxSession == null) return;
-
-            TerminalSession newTerminalSession = newTermuxSession.getTerminalSession();
-            setCurrentSession(newTerminalSession);
-
-            mActivity.getDrawer().closeDrawers();
+            return null;
         }
+
+        TerminalSession currentSession = mActivity.getCurrentSession();
+
+        String workingDirectory;
+        if (currentSession == null) {
+            workingDirectory = mActivity.getProperties().getDefaultWorkingDirectory();
+        } else {
+            workingDirectory = currentSession.getCwd();
+        }
+
+        TermuxSession newTermuxSession = service.createTermuxSession(null, null, null, workingDirectory, isFailSafe, sessionName);
+        if (newTermuxSession == null) return null;
+
+        termuxSessionListNotifyUpdated();
+        return newTermuxSession.getTerminalSession();
+    }
+
+    /**
+     * Close one pane's session (Ctrl+Shift+W, split toggle). A running process is only killed
+     * after the same confirmation as "Kill process"; the session is then removed when it exits.
+     */
+    public void closeSession(@Nullable TerminalSession session) {
+        if (session == null) return;
+        closeSessions(Collections.singletonList(session));
+    }
+
+    /** Close a desktop tab: its session and its split partner, with one confirmation. */
+    public void closeTab(@Nullable TerminalSession tab) {
+        if (tab == null) return;
+        List<TerminalSession> sessions = new ArrayList<>();
+        sessions.add(tab);
+        DesktopSplitPaneManager splitPaneManager = mActivity.getDesktopSplitPaneManager();
+        TerminalSession partner = splitPaneManager != null ? splitPaneManager.partnerOf(tab) : null;
+        if (partner != null) sessions.add(partner);
+        closeSessions(sessions);
+    }
+
+    private void closeSessions(List<TerminalSession> sessions) {
+        boolean anyRunning = false;
+        for (TerminalSession s : sessions) anyRunning |= s.isRunning();
+        if (!anyRunning) {
+            for (TerminalSession s : sessions) removeFinishedSession(s);
+            return;
+        }
+
+        new AlertDialog.Builder(mActivity)
+            .setIcon(android.R.drawable.ic_dialog_alert)
+            .setMessage(R.string.title_confirm_kill_process)
+            .setPositiveButton(android.R.string.yes, (dialog, id) -> {
+                for (TerminalSession s : sessions) {
+                    if (s.isRunning()) {
+                        // SIGKILL is async: TermuxService only removes a session once it has exited.
+                        mSessionsToRemoveOnExit.add(s);
+                        s.finishIfRunning();
+                    } else {
+                        removeFinishedSession(s);
+                    }
+                }
+            })
+            .setNegativeButton(android.R.string.no, null)
+            .show();
     }
 
     public void setCurrentStoredSession() {
@@ -434,6 +529,13 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
         // Return pressed with finished session - remove it.
         TermuxService service = mActivity.getTermuxService();
         if (service == null) return;
+
+        // Desktop tabs: keep the tab/split layout consistent (closing a pane keeps its tab).
+        DesktopSplitPaneManager splitPaneManager = mActivity.getDesktopSplitPaneManager();
+        if (splitPaneManager != null) {
+            splitPaneManager.removeSession(finishedSession);
+            return;
+        }
 
         int index = service.removeTermuxSession(finishedSession);
 
@@ -511,7 +613,9 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
             updateBackgroundColor();
 
             final Typeface newTypeface = (fontFile.exists() && fontFile.length() > 0) ? Typeface.createFromFile(fontFile) : Typeface.MONOSPACE;
-            mActivity.getTerminalView().setTypeface(newTypeface);
+            DesktopSplitPaneManager splitPaneManager = mActivity.getDesktopSplitPaneManager();
+            if (splitPaneManager != null) splitPaneManager.setTypeface(newTypeface);
+            else mActivity.getTerminalView().setTypeface(newTypeface);
         } catch (Exception e) {
             Logger.logStackTraceWithMessage(LOG_TAG, "Error in checkForFontAndColors()", e);
         }
