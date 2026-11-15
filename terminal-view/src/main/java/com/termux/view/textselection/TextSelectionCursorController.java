@@ -24,10 +24,15 @@ public class TextSelectionCursorController implements CursorController {
     private final TextSelectionHandleView mStartHandle, mEndHandle;
     private String mStoredSelectedText;
     private boolean mIsSelectingText = false;
+    private boolean mIsMouseSelection = false;
     private long mShowStartTime = System.currentTimeMillis();
 
     private final int mHandleHeight;
     private int mSelX1 = -1, mSelX2 = -1, mSelY1 = -1, mSelY2 = -1;
+    private int mAnchorX = -1, mAnchorY = -1;
+    private long mLastMouseDownTime = 0;
+    private int mMouseClickCount = 0;
+    private int mLastClickX = -1, mLastClickY = -1;
 
     private ActionMode mActionMode;
     public final int ACTION_COPY = 1;
@@ -60,7 +65,7 @@ public class TextSelectionCursorController implements CursorController {
         // prevent hide calls right after a show call, like long pressing the down key
         // 300ms seems long enough that it wouldn't cause hide problems if action button
         // is quickly clicked after the show, otherwise decrease it
-        if (System.currentTimeMillis() - mShowStartTime < 300) {
+        if (!mIsMouseSelection && System.currentTimeMillis() - mShowStartTime < 300) {
             return false;
         }
 
@@ -73,7 +78,9 @@ public class TextSelectionCursorController implements CursorController {
         }
 
         mSelX1 = mSelY1 = mSelX2 = mSelY2 = -1;
+        mAnchorX = mAnchorY = -1;
         mIsSelectingText = false;
+        mIsMouseSelection = false;
 
         return true;
     }
@@ -82,11 +89,13 @@ public class TextSelectionCursorController implements CursorController {
     public void render() {
         if (!isActive()) return;
 
-        mStartHandle.positionAtCursor(mSelX1, mSelY1, false);
-        mEndHandle.positionAtCursor(mSelX2 + 1, mSelY2, false);
+        if (!mIsMouseSelection) {
+            mStartHandle.positionAtCursor(mSelX1, mSelY1, false);
+            mEndHandle.positionAtCursor(mSelX2 + 1, mSelY2, false);
 
-        if (mActionMode != null) {
-            mActionMode.invalidate();
+            if (mActionMode != null) {
+                mActionMode.invalidate();
+            }
         }
     }
 
@@ -402,6 +411,109 @@ public class TextSelectionCursorController implements CursorController {
      */
     public boolean isSelectionEndDragged() {
         return mEndHandle.isDragging();
+    }
+
+    /**
+     * Start a desktop mouse selection on primary button press (LMB down).
+     * Supports single-click (character anchor), double-click (word), and triple-click (full row).
+     */
+    public void startMouseSelection(MotionEvent event) {
+        if (terminalView.mEmulator == null) return;
+        int[] columnAndRow = terminalView.getColumnAndRow(event, true);
+        int col = Math.max(0, Math.min(columnAndRow[0], terminalView.mEmulator.mColumns - 1));
+        int row = columnAndRow[1];
+
+        long now = event.getEventTime();
+        if (now - mLastMouseDownTime <= 400 && col == mLastClickX && row == mLastClickY) {
+            mMouseClickCount = (mMouseClickCount % 3) + 1;
+        } else {
+            mMouseClickCount = 1;
+        }
+        mLastMouseDownTime = now;
+        mLastClickX = col;
+        mLastClickY = row;
+
+        mStartHandle.hide();
+        mEndHandle.hide();
+        if (mActionMode != null) {
+            mActionMode.finish();
+            mActionMode = null;
+        }
+
+        mAnchorX = col;
+        mAnchorY = row;
+        mIsMouseSelection = true;
+
+        if (mMouseClickCount == 1) {
+            // Single click clears active selection until the user drags
+            mSelX1 = mSelY1 = mSelX2 = mSelY2 = -1;
+            mIsSelectingText = false;
+        } else if (mMouseClickCount == 2) {
+            // Double click: select word at location
+            setInitialTextSelectionPosition(event);
+            mIsSelectingText = true;
+        } else if (mMouseClickCount == 3) {
+            // Triple click: select entire line
+            mSelX1 = 0;
+            mSelX2 = terminalView.mEmulator.mColumns - 1;
+            mSelY1 = mSelY2 = row;
+            mIsSelectingText = true;
+        }
+        terminalView.invalidate();
+    }
+
+    /**
+     * Update selection range as the mouse drags with primary button held.
+     */
+    public void updateMouseSelection(MotionEvent event) {
+        if (terminalView.mEmulator == null || mAnchorY == -1) return;
+
+        TerminalBuffer screen = terminalView.mEmulator.getScreen();
+        final int scrollRows = screen.getActiveRows() - terminalView.mEmulator.mRows;
+
+        // Auto-scroll transcript if dragging above or below viewport on primary screen
+        if (!terminalView.mEmulator.isAlternateBufferActive()) {
+            int topRow = terminalView.getTopRow();
+            if (event.getY() < 0 && topRow > -scrollRows) {
+                terminalView.setTopRow(Math.max(-scrollRows, topRow - 1));
+            } else if (event.getY() > terminalView.getHeight() && topRow < 0) {
+                terminalView.setTopRow(Math.min(0, topRow + 1));
+            }
+        }
+
+        int[] columnAndRow = terminalView.getColumnAndRow(event, true);
+        int curX = Math.max(0, Math.min(columnAndRow[0], terminalView.mEmulator.mColumns - 1));
+        int curY = Math.max(-scrollRows, Math.min(columnAndRow[1], terminalView.mEmulator.mRows - 1));
+
+        if (curX == mAnchorX && curY == mAnchorY && mMouseClickCount == 1) {
+            return;
+        }
+
+        mIsMouseSelection = true;
+        mIsSelectingText = true;
+
+        if (curY < mAnchorY || (curY == mAnchorY && curX <= mAnchorX)) {
+            mSelX1 = getValidCurX(screen, curY, curX);
+            mSelY1 = curY;
+            mSelX2 = getValidCurX(screen, mAnchorY, mAnchorX);
+            mSelY2 = mAnchorY;
+        } else {
+            mSelX1 = getValidCurX(screen, mAnchorY, mAnchorX);
+            mSelY1 = mAnchorY;
+            mSelX2 = getValidCurX(screen, curY, curX);
+            mSelY2 = curY;
+        }
+
+        terminalView.invalidate();
+    }
+
+    /**
+     * Store the currently selected text so a right-click context menu can access it.
+     */
+    public void cacheSelectedTextForContextMenu() {
+        if (mIsSelectingText) {
+            mStoredSelectedText = getSelectedText();
+        }
     }
 
 }
